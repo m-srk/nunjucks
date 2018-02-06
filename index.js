@@ -9,6 +9,7 @@ var precompile = require('./src/precompile');
 module.exports = {};
 module.exports.Environment = env.Environment;
 module.exports.Template = env.Template;
+module.exports.Context = env.Context; 
 
 module.exports.Loader = Loader;
 module.exports.FileSystemLoader = loaders.FileSystemLoader;
