@@ -88,7 +88,7 @@ function depthWalk(ast, func) {
     return walk(ast, func, true);
 }
 
-function _liftFilters(node, asyncFilters, prop) {
+function _liftFilters(node, asyncFilters, asyncFunctions, prop) {
     var children = [];
 
     var walked = depthWalk(prop ? node[prop] : node, function(node) {
@@ -108,6 +108,22 @@ function _liftFilters(node, asyncFilters, prop) {
                                                 node.args,
                                                 symbol));
             return symbol;
+        }
+        else if(node instanceof nodes.FunCall &&
+                 lib.inOperator(node.name.value, asyncFunctions)) {
+            var symbol = new nodes.Symbol(node.lineno,
+                                          node.colno,
+                                          gensym());
+
+            var contextflag = asyncFunctions[node.name.value];
+
+            children.push(new nodes.FunCallAsync(node.lineno,
+                                                node.colno,
+                                                node.name,
+                                                node.args,
+                                                symbol,
+                                                contextflag));
+            return symbol; 
         }
     });
 
@@ -132,22 +148,22 @@ function _liftFilters(node, asyncFilters, prop) {
     }
 }
 
-function liftFilters(ast, asyncFilters) {
+function liftFilters(ast, asyncFilters, asyncFunctions) {
     return depthWalk(ast, function(node) {
         if(node instanceof nodes.Output) {
-            return _liftFilters(node, asyncFilters);
+            return _liftFilters(node, asyncFilters, asyncFunctions);
         }
         else if(node instanceof nodes.Set) {
-            return _liftFilters(node, asyncFilters, 'value');
+            return _liftFilters(node, asyncFilters, asyncFunctions, 'value');
         }
         else if(node instanceof nodes.For) {
-            return _liftFilters(node, asyncFilters, 'arr');
+            return _liftFilters(node, asyncFilters, asyncFunctions, 'arr');
         }
         else if(node instanceof nodes.If) {
-            return _liftFilters(node, asyncFilters, 'cond');
+            return _liftFilters(node, asyncFilters, asyncFunctions, 'cond');
         }
         else if(node instanceof nodes.CallExtension) {
-            return _liftFilters(node, asyncFilters, 'args');
+            return _liftFilters(node, asyncFilters, asyncFunctions, 'args');
         }
     });
 }
@@ -187,6 +203,7 @@ function convertStatements(ast) {
         var async = false;
         walk(node, function(node) {
             if(node instanceof nodes.FilterAsync ||
+               node instanceof nodes.FunCallAsync ||
                node instanceof nodes.IfAsync ||
                node instanceof nodes.AsyncEach ||
                node instanceof nodes.AsyncAll ||
@@ -221,12 +238,12 @@ function convertStatements(ast) {
     });
 }
 
-function cps(ast, asyncFilters) {
-    return convertStatements(liftSuper(liftFilters(ast, asyncFilters)));
+function cps(ast, asyncFilters, asyncFunctions) {
+    return convertStatements(liftSuper(liftFilters(ast, asyncFilters, asyncFunctions)));
 }
 
-function transform(ast, asyncFilters) {
-    return cps(ast, asyncFilters || []);
+function transform(ast, asyncFilters, asyncFunctions) {
+    return cps(ast, asyncFilters || [], asyncFunctions || []);
 }
 
 // var parser = require('./parser');

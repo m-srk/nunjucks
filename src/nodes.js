@@ -108,6 +108,9 @@ var FromImport = Node.extend('FromImport', {
     }
 });
 var FunCall = Node.extend('FunCall', { fields: ['name', 'args'] });
+var FunCallAsync = FunCall.extend('FunCallAsync', {
+    fields: ['name', 'args', 'symbol', 'contextflag']
+});
 var Filter = FunCall.extend('Filter');
 var FilterAsync = Filter.extend('FilterAsync', {
     fields: ['name', 'args', 'symbol']
@@ -119,15 +122,12 @@ var TemplateRef = Node.extend('TemplateRef', { fields: ['template'] });
 var Extends = TemplateRef.extend('Extends');
 var Include = Node.extend('Include', { fields: ['template', 'ignoreMissing'] });
 var Set = Node.extend('Set', { fields: ['targets', 'value'] });
-var Switch = Node.extend('Switch', { fields: [ 'expr', 'cases', 'default' ]});
-var Case = Node.extend('Case', { fields: ['cond', 'body'] });
 var Output = NodeList.extend('Output');
 var Capture = Node.extend('Capture', { fields: ['body'] });
 var TemplateData = Literal.extend('TemplateData');
 var UnaryOp = Node.extend('UnaryOp', { fields: ['target'] });
 var BinOp = Node.extend('BinOp', { fields: ['left', 'right'] });
 var In = BinOp.extend('In');
-var Is = BinOp.extend('Is');
 var Or = BinOp.extend('Or');
 var And = BinOp.extend('And');
 var Not = UnaryOp.extend('Not');
@@ -272,6 +272,7 @@ module.exports = {
     Import: Import,
     FromImport: FromImport,
     FunCall: FunCall,
+    FunCallAsync: FunCallAsync,
     Filter: Filter,
     FilterAsync: FilterAsync,
     KeywordArgs: KeywordArgs,
@@ -280,12 +281,9 @@ module.exports = {
     Extends: Extends,
     Include: Include,
     Set: Set,
-    Switch: Switch,
-    Case: Case,
     LookupVal: LookupVal,
     BinOp: BinOp,
     In: In,
-    Is: Is,
     Or: Or,
     And: And,
     Not: Not,

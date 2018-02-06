@@ -530,9 +530,10 @@ return /******/ (function(modules) { // webpackBootstrap
 	        this.globals = globals();
 	        this.filters = {};
 	        this.asyncFilters = [];
-	        this.asyncFunctions = {};
+	        this.asyncFunctions = [];
 	        this.extensions = {};
 	        this.extensionsList = [];
+	        this.block_stack = [];
 
 	        for(var name in builtin_filters) {
 	            this.addFilter(name, builtin_filters[name]);
@@ -575,11 +576,10 @@ return /******/ (function(modules) { // webpackBootstrap
 	        return !!this.extensions[name];
 	    },
 
-	    addGlobal: function(name, value, async, contextflag) {
+	    addGlobal: function(name, value, async) {
 	        // TODO handle global non-function object assignment maybe ?
-	        if (typeof value === 'function' && async) {
-	            this.asyncFunctions[name] = ((contextflag) ? true : false);
-	        }
+	        if (typeof value === 'function' && async)
+	            this.asyncFunctions.push(name);
 	        this.globals[name] = value;
 	        return this;
 	    },
@@ -810,6 +810,29 @@ return /******/ (function(modules) { // webpackBootstrap
 	        for(var name in blocks) {
 	            this.addBlock(name, blocks[name]);
 	        }
+
+		    var _this = this;
+	        var arr = [];
+
+	        for (var i in this.blocks){
+	           arr.push(i);
+	        }
+
+            var self = {};
+            function createfunc(i) {
+	            return function(cb) {
+	                        var output = _this.blocks[i];
+	                        var Frame = runtime.Frame;
+	                        var _data;
+	                        output[0](_this.env, _this, new Frame (), runtime,  function (i, data) {
+	                            return cb(null, data);
+	                        })
+	                    };
+	        }
+            for (var i = 0; i < arr.length; i++) {
+                self[arr[i]] = createfunc(arr[i]);
+            }
+            this.env.block_stack.push(self);
 	    },
 
 	    lookup: function(name) {
@@ -945,6 +968,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	            frame || new Frame(),
 	            runtime,
 	            function(err, res) {
+	            	_this.env.block_stack.pop();
 	                if(err) {
 	                    err = lib.prettifyError(_this.path, _this.env.opts.dev, err);
 	                }
@@ -963,6 +987,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	                }
 	            }
 	        );
+	        
 	        return syncResult;
 	    },
 
@@ -988,7 +1013,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	        var frame = parentFrame ? parentFrame.push() : new Frame();
 	        frame.topLevel = true;
-
+	        var _this = this;
 	        // Run the rootRenderFunc to populate the context with exported vars
 	        var context = new Context(ctx || {}, this.blocks, this.env);
 	        this.rootRenderFunc(this.env,
@@ -996,6 +1021,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	                            frame,
 	                            runtime,
 	                            function(err) {
+	                       	_this.env.block_stack.pop();
 	        		        if ( err ) {
 	        			    cb(err, null);
 	        		        } else {
@@ -1018,11 +1044,11 @@ return /******/ (function(modules) { // webpackBootstrap
 	        }
 	        else {
 	            var source = compiler.compile(this.tmplStr,
-	                                          this.env.asyncFilters,
-	                                          this.env.asyncFunctions,
-	                                          this.env.extensionsList,
-	                                          this.path,
-	                                          this.env.opts);
+                                          this.env.asyncFilters,
+                                          this.env.asyncFunctions,
+                                          this.env.extensionsList,
+                                          this.path,
+                                          this.env.opts);
 
 	            /* jslint evil: true */
 	            var func = new Function(source);
@@ -1535,8 +1561,8 @@ return /******/ (function(modules) { // webpackBootstrap
 	    },
 
 	    addArrayScopeLevel: function() {
-	        this.scopeClosers = '}]))' + this.scopeClosers;
-	    },
+        	this.scopeClosers += '}]))';
+    	},
 
 	    addScopeLevel: function() {
 	        this.scopeClosers += '})';
@@ -1913,17 +1939,34 @@ return /******/ (function(modules) { // webpackBootstrap
 	    },
 
 	    compileFunCallAsync: function(node, frame) {
-	        var name = node.name;
-	        this.assertType(name, nodes.Symbol);
+	        // Keep track of line/col info at runtime by settings
+	        // variables within an expression. An expression in javascript
+	        // like (x, y, z) returns the last value, and x and y can be
+	        // anything
+
+	        this.emit('(lineno = ' + node.lineno +
+	                  ', colno = ' + node.colno + ', ');
+
 	        // Extract symbol for callback
 	        var symbol = node.symbol.value;
 	        frame.set(symbol, symbol);
-	        this.emit('env.getGlobal("' + node.name.value + '").call(context, ');
-	        this._compileAggregate(node.args, frame);
-	        (node.contextflag) ? this.emitLine(', context, frame, runtime, ' + this.makeCallback(symbol)) :
-	                            this.emitLine(', ' + this.makeCallback(symbol));
 
-	        this.addScopeLevel();
+	        this.emit('runtime.callWrap(');
+	        // Compile it as normal.
+	        this._compileExpression(node.name, frame);
+
+	        // Output the name of what we're calling so we can get friendly errors
+	        // if the lookup fails.
+	        this.emit(', "' + this._getNodeName(node.name).replace(/"/g, '\\"') + '", context, ');
+
+	        this._compileAggregate(node.args, frame, '[', ',');
+
+	        this.emitLine('' + this.makeCallback(symbol));
+	        this.addArrayScopeLevel();
+	        
+
+	        // Compile method based on FilterAsync
+
 	    },
 
 	    compileFilter: function(node, frame) {
@@ -4601,7 +4644,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	});
 	var FunCall = Node.extend('FunCall', { fields: ['name', 'args'] });
 	var FunCallAsync = FunCall.extend('FunCallAsync', {
-	    fields: ['name', 'args', 'symbol', 'contextflag']
+    	fields: ['name', 'args', 'symbol']
 	});
 	var Filter = FunCall.extend('Filter');
 	var FilterAsync = Filter.extend('FilterAsync', {
@@ -4916,19 +4959,16 @@ return /******/ (function(modules) { // webpackBootstrap
 	            return symbol;
 	        }
 	        else if(node instanceof nodes.FunCall &&
-	                 lib.inOperator(node.name.value, asyncFunctions)) {
+	                 lib.indexOf(asyncFunctions, node.name.value) !== -1) {
 	            var symbol = new nodes.Symbol(node.lineno,
 	                                          node.colno,
 	                                          gensym());
-
-	            var contextflag = asyncFunctions[node.name.value];
 
 	            children.push(new nodes.FunCallAsync(node.lineno,
 	                                                node.colno,
 	                                                node.name,
 	                                                node.args,
-	                                                symbol,
-	                                                contextflag));
+	                                                symbol));
 	            return symbol; 
 	        }
 	    });

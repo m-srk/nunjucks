@@ -126,15 +126,11 @@ function makeKeywordArgs(obj) {
     return obj;
 }
 
-function isKeywordArgs(obj) {
-  return obj && Object.prototype.hasOwnProperty.call(obj, '__keywords');
-}
-
 function getKeywordArgs(args) {
     var len = args.length;
     if(len) {
         var lastArg = args[len - 1];
-        if(isKeywordArgs(lastArg)) {
+        if(lastArg && lastArg.hasOwnProperty('__keywords')) {
             return lastArg;
         }
     }
@@ -148,7 +144,7 @@ function numArgs(args) {
     }
 
     var lastArg = args[len - 1];
-    if(isKeywordArgs(lastArg)) {
+    if(lastArg && lastArg.hasOwnProperty('__keywords')) {
         return len - 1;
     }
     else {

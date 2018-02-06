@@ -7,7 +7,6 @@ var Obj = require('./object');
 var compiler = require('./compiler');
 var builtin_filters = require('./filters');
 var builtin_loaders = require('./loaders');
-var builtin_tests = require('./tests');
 var runtime = require('./runtime');
 var globals = require('./globals');
 var waterfall = require('a-sync-waterfall');
@@ -75,16 +74,13 @@ var Environment = Obj.extend({
 
         this.globals = globals();
         this.filters = {};
-        this.tests = {};
         this.asyncFilters = [];
+        this.asyncFunctions = {};
         this.extensions = {};
         this.extensionsList = [];
 
         for(var name in builtin_filters) {
             this.addFilter(name, builtin_filters[name]);
-        }
-        for(var test in builtin_tests) {
-            this.addTest(test, builtin_tests[test]);
         }
     },
 
@@ -124,7 +120,11 @@ var Environment = Obj.extend({
         return !!this.extensions[name];
     },
 
-    addGlobal: function(name, value) {
+    addGlobal: function(name, value, async, contextflag) {
+        // TODO handle global non-function object assignment maybe ?
+        if (typeof value === 'function' && async) {
+            this.asyncFunctions[name] = ((contextflag) ? true : false);
+        }
         this.globals[name] = value;
         return this;
     },
@@ -151,18 +151,6 @@ var Environment = Obj.extend({
             throw new Error('filter not found: ' + name);
         }
         return this.filters[name];
-    },
-
-    addTest: function(name, func) {
-        this.tests[name] = func;
-        return this;
-    },
-
-    getTest: function(name) {
-        if(!this.tests[name]) {
-            throw new Error('test not found: ' + name);
-        }
-        return this.tests[name];
     },
 
     resolveTemplate: function(loader, parentName, filename) {
@@ -356,7 +344,7 @@ var Context = Obj.extend({
         // Make a duplicate of ctx
         this.ctx = {};
         for(var k in ctx) {
-            if(Object.prototype.hasOwnProperty.call(ctx, k)) {
+            if(ctx.hasOwnProperty(k)) {
                 this.ctx[k] = ctx[k];
             }
         }
@@ -495,7 +483,6 @@ Template = Obj.extend({
         var frame = parentFrame ? parentFrame.push(true) : new Frame();
         frame.topLevel = true;
         var syncResult = null;
-        var didError = false;
 
         _this.rootRenderFunc(
             _this.env,
@@ -503,13 +490,8 @@ Template = Obj.extend({
             frame || new Frame(),
             runtime,
             function(err, res) {
-                if (didError) {
-                    // prevent multiple calls to cb
-                    return;
-                }
                 if(err) {
                     err = lib.prettifyError(_this.path, _this.env.opts.dev, err);
-                    didError = true;
                 }
 
                 if(cb) {
@@ -526,7 +508,6 @@ Template = Obj.extend({
                 }
             }
         );
-
         return syncResult;
     },
 
@@ -583,6 +564,7 @@ Template = Obj.extend({
         else {
             var source = compiler.compile(this.tmplStr,
                                           this.env.asyncFilters,
+                                          this.env.asyncFunctions,
                                           this.env.extensionsList,
                                           this.path,
                                           this.env.opts);
@@ -611,6 +593,7 @@ Template = Obj.extend({
 });
 
 module.exports = {
+    Context: Context,
     Environment: Environment,
     Template: Template
 };

@@ -96,6 +96,10 @@ var Compiler = Object.extend({
         this.buffer = null;
     },
 
+    addArrayScopeLevel: function() {
+        this.scopeClosers = '}]))' + this.scopeClosers;
+    },
+
     addScopeLevel: function() {
         this.scopeClosers += '})';
     },
@@ -373,23 +377,6 @@ var Compiler = Object.extend({
       this.emit(')');
     },
 
-    compileIs: function(node, frame) {
-      // first, we need to try to get the name of the test function, if it's a
-      // callable (i.e., has args) and not a symbol.
-      var right = node.right.name
-        ? node.right.name.value
-        // otherwise go with the symbol value
-        : node.right.value;
-      this.emit('env.getTest("' + right + '").call(context, ');
-      this.compile(node.left, frame);
-      // compile the arguments for the callable if they exist
-      if (node.right.args) {
-        this.emit(',');
-        this.compile(node.right.args, frame);
-      }
-      this.emit(') === true');
-    },
-
     compileOr: binOpEmitter(' || '),
     compileAnd: binOpEmitter(' && '),
     compileAdd: binOpEmitter(' + '),
@@ -487,6 +474,20 @@ var Compiler = Object.extend({
         this.emit(')');
     },
 
+    compileFunCallAsync: function(node, frame) {
+        var name = node.name;
+        this.assertType(name, nodes.Symbol);
+        // Extract symbol for callback
+        var symbol = node.symbol.value;
+        frame.set(symbol, symbol);
+        this.emit('env.getGlobal("' + node.name.value + '").call(context, ');
+        this._compileAggregate(node.args, frame);
+        (node.contextflag) ? this.emitLine(', context, frame, runtime, ' + this.makeCallback(symbol)) :
+                            this.emitLine(', ' + this.makeCallback(symbol));
+
+        this.addScopeLevel();
+    },
+
     compileFilter: function(node, frame) {
         var name = node.name;
         this.assertType(name, nodes.Symbol);
@@ -570,28 +571,6 @@ var Compiler = Object.extend({
                 this.emitLine('}');
             }
         }, this);
-    },
-
-    compileSwitch: function(node, frame) {
-        this.emit('switch (');
-        this.compile(node.expr, frame);
-        this.emit(') {');
-        for (var i = 0; i < node.cases.length; i += 1) {
-            var c = node.cases[i];
-            this.emit('case ');
-            this.compile(c.cond, frame);
-            this.emit(': ');
-            this.compile(c.body, frame);
-            // preserve fall-throughs
-            if (c.body.children.length) {
-                this.emitLine('break;');
-            }
-        }
-        if (node.default) {
-            this.emit('default:');
-            this.compile(node.default, frame);
-        }
-        this.emit('}');
     },
 
     compileIf: function(node, frame, async) {
@@ -834,11 +813,10 @@ var Compiler = Object.extend({
         this._compileAsyncLoop(node, frame, true);
     },
 
-    _compileMacro: function(node, frame) {
+    _compileMacro: function(node) {
         var args = [];
         var kwargs = null;
         var funcId = 'macro_' + this.tmpid();
-        var keepFrame = (frame !== undefined);
 
         // Type check the definition of the args
         lib.each(node.args.children, function(arg, i) {
@@ -864,20 +842,16 @@ var Compiler = Object.extend({
         // arguments so support setting positional args with keywords
         // args and passing keyword args as positional args
         // (essentially default values). See runtime.js.
-        if (keepFrame) {
-            frame = frame.push(true);
-        } else {
-            frame = new Frame();
-        }
+        var frame = new Frame();
         this.emitLines(
             'var ' + funcId + ' = runtime.makeMacro(',
             '[' + argNames.join(', ') + '], ',
             '[' + kwargNames.join(', ') + '], ',
             'function (' + realNames.join(', ') + ') {',
             'var callerFrame = frame;',
-            'frame = ' + ((keepFrame) ? 'frame.push(true);' : 'new runtime.Frame();'),
+            'frame = new runtime.Frame();',
             'kwargs = kwargs || {};',
-            'if (Object.prototype.hasOwnProperty.call(kwargs, "caller")) {',
+            'if (kwargs.hasOwnProperty("caller")) {',
             'frame.set("caller", kwargs.caller); }'
         );
 
@@ -895,7 +869,7 @@ var Compiler = Object.extend({
             lib.each(kwargs.children, function(pair) {
                 var name = pair.key.value;
                 this.emit('frame.set("' + name + '", ' +
-                          'Object.prototype.hasOwnProperty.call(kwargs, "' + name + '") ? ' +
+                          'kwargs.hasOwnProperty("' + name + '") ? ' +
                           'kwargs["' + name + '"] : ');
                 this._compileExpression(pair.value, frame);
                 this.emitLine(');');
@@ -909,7 +883,7 @@ var Compiler = Object.extend({
           this.compile(node.body, frame);
         });
 
-        this.emitLine('frame = ' + ((keepFrame) ? 'frame.pop();' : 'callerFrame;'));
+        this.emitLine('frame = callerFrame;');
         this.emitLine('return new runtime.SafeString(' + bufferId + ');');
         this.emitLine('});');
         this.popBufferId();
@@ -918,7 +892,7 @@ var Compiler = Object.extend({
     },
 
     compileMacro: function(node, frame) {
-        var funcId = this._compileMacro(node);
+        var funcId = this._compileMacro(node, frame);
 
         // Expose the macro to the templates
         var name = node.name.value;
@@ -993,7 +967,7 @@ var Compiler = Object.extend({
                 alias = name;
             }
 
-            this.emitLine('if(Object.prototype.hasOwnProperty.call(' + importedId + ', "' + name + '")) {');
+            this.emitLine('if(' + importedId + '.hasOwnProperty("' + name + '")) {');
             this.emitLine('var ' + id + ' = ' + importedId + '.' + name + ';');
             this.emitLine('} else {');
             this.emitLine('cb(new Error("cannot import \'' + name + '\'")); return;');
@@ -1103,10 +1077,6 @@ var Compiler = Object.extend({
     },
 
     compileCapture: function(node, frame) {
-        // we need to temporarily override the current buffer id as 'output'
-        // so the set block writes to the capture output instead of the buffer
-        var buffer = this.buffer;
-        this.buffer = 'output';
         this.emitLine('(function() {');
         this.emitLine('var output = "";');
         this.withScopedSyntax(function () {
@@ -1114,8 +1084,6 @@ var Compiler = Object.extend({
         });
         this.emitLine('return output;');
         this.emitLine('})()');
-        // and of course, revert back to the old buffer id
-        this.buffer = buffer;
     },
 
     compileOutput: function(node, frame) {
@@ -1220,7 +1188,7 @@ var Compiler = Object.extend({
 // console.log(tmpl);
 
 module.exports = {
-    compile: function(src, asyncFilters, extensions, name, opts) {
+    compile: function(src, asyncFilters, asyncFunctions, extensions, name, opts) {
         var c = new Compiler(name, opts.throwOnUndefined);
 
         // Run the extension preprocessors against the source.
@@ -1237,6 +1205,7 @@ module.exports = {
                          extensions,
                          opts),
             asyncFilters,
+            asyncFunctions,
             name
         ));
         return c.getCode();
